@@ -549,6 +549,7 @@ h1{font-size:20px;margin:0 0 4px;font-weight:700;display:flex;align-items:center
 .row:last-child{border-bottom:none}
 .row .status-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .row .name-col{width:150px;flex-shrink:0;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .name-col .srv-state{font-size:11px;font-weight:500;color:#8a8f98;margin-top:3px}
 .row .cols{flex:1;display:flex;flex-wrap:wrap;gap:22px;align-items:center}
 .col{min-width:78px}
 .col .k{font-size:11px;color:#9aa0a8;margin-bottom:4px;white-space:nowrap}
@@ -558,6 +559,7 @@ h1{font-size:20px;margin:0 0 4px;font-weight:700;display:flex;align-items:center
 .row.offline .name-col{color:#9aa0a8}
 .row.offline .cols{color:#c4c8cd;font-size:13px}
 .row.starting .name-col{color:#b45309}
+.row.starting .name-col .srv-state{color:#d97706}
 .row.starting .cols{color:#d97706;font-size:13px}
 footer{color:#9aa0a8;text-align:center;margin-top:20px;font-size:12px}
 @media (max-width:900px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
@@ -623,6 +625,11 @@ function statusLabel(d){
   if(s==='running') return '运行中';
   return s || '未知';
 }
+function stateText(d){
+  if(d.state) return d.state;
+  if(d.suspended) return 'suspended';
+  return d.ok ? 'running' : 'offline';
+}
 function fmtMem(d){
   var u=Number(d.memUsedMB)||0, lim=Number(d.memLimitMB)||0;
   if(lim>0) return u.toFixed(1)+'/'+lim.toFixed(0)+' MB';
@@ -658,15 +665,14 @@ function rowHTML(d,rate){
   if(ok || isTrans){
     var dot = ok ? '#22c55e' : '#f59e0b';
     var cls = ok ? '' : ' starting';
-    var extra = ok ? '' : statusLabel(d);
     return '<div class="row'+cls+'"><span class="status-dot" style="background:'+dot+'"></span>'+
-      '<div class="name-col">'+esc(d.name)+'</div>'+
-      '<div class="cols">'+metricsCols(d,rate,extra)+'</div></div>';
+      '<div class="name-col"><div class="srv-name">'+esc(d.name)+'</div><div class="srv-state">'+esc(stateText(d))+'</div></div>'+
+      '<div class="cols">'+metricsCols(d,rate)+'</div></div>';
   }
   // 真离线 / 挂起：仅显示状态文案
   var dot = d.suspended ? '#f59e0b' : '#ef4444';
   return '<div class="row offline"><span class="status-dot" style="background:'+dot+'"></span>'+
-    '<div class="name-col">'+esc(d.name)+'</div>'+
+    '<div class="name-col"><div class="srv-name">'+esc(d.name)+'</div><div class="srv-state">'+esc(stateText(d))+'</div></div>'+
     '<div class="cols"><span>'+esc(statusLabel(d))+'</span></div></div>';
 }
 function applyStatus(arr){
