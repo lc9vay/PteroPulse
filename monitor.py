@@ -158,8 +158,9 @@ def _get_server_name(sid: str) -> str:
 
 def note_transition(sid: str, prev_state: str, state: str, ok: bool, offline: bool = None):
     """状态翻转检测 + TG 通知。
-    仅在「真正离线」(offline) 与「在线」(ok) 之间翻转时推送；
-    starting/stopping 过渡态不算离线，不发掉线通知。"""
+    仅在「真正离线」(offline) 与「在线」(ok) 之间翻转时推送掉线/恢复；
+    starting/stopping 过渡态不算离线，不发掉线通知；
+    过渡态 -> running 视为启动完成，单独推送。"""
     if offline is None:
         offline = not ok
     if prev_state and state != prev_state:
@@ -185,23 +186,18 @@ def note_transition(sid: str, prev_state: str, state: str, ok: bool, offline: bo
         cur = "t"
     if prev_off is not None and prev_off != cur:
         name = _get_server_name(sid)
+        state_line = (
+            f"服务器: {name}\nID: {sid}\n"
+            f"状态: <code>{state}</code>\n"
+            f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
         if cur is True and prev_off is False:
-            msg = (
-                f"🟢 <b>服务器已恢复</b>\n"
-                f"服务器: {name}\nID: {sid}\n"
-                f"状态: <code>{state}</code>\n"
-                f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            tg_send(msg)
+            tg_send(f"🟢 <b>服务器已恢复</b>\n{state_line}")
+        elif cur is True and prev_off == "t":
+            tg_send(f"🟢 <b>服务器已启动</b>\n{state_line}")
         elif cur is False and prev_off is True:
-            msg = (
-                f"🔴 <b>服务器掉线</b>\n"
-                f"服务器: {name}\nID: {sid}\n"
-                f"状态: <code>{state}</code>\n"
-                f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            tg_send(msg)
-        # 进入/离开过渡态不发 TG
+            tg_send(f"🔴 <b>服务器掉线</b>\n{state_line}")
+        # 其他过渡态之间的翻转不发 TG
     _last_ok[sid] = cur
 
 
