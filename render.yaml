@@ -1,0 +1,28 @@
+# Render Blueprint 配置
+# 部署方式:Render Dashboard → New → Blueprint → 选择你的 GitHub 仓库
+# 纯 GitHub 部署:走 Dockerfile 的 CMD ["python","monitor.py"],不再用 MONITOR_SCRIPT 环境变量
+services:
+  - type: web
+    name: pteropulse
+    runtime: docker            # 使用仓库里的 Dockerfile
+    plan: free
+    region: oregon
+    healthCheckPath: /
+    autoDeploy: true
+    autoDeployTrigger: commit  # 每次 push 到 main 自动重新部署
+    autoDeployPath: .
+    dockerfilePath: Dockerfile
+    # 不设 dockerCommand -> 用 Dockerfile 的 CMD ["python","monitor.py"]
+    envVars:
+      - key: PTERO_API_KEYS
+        sync: false            # 部署时手动填:Client API Key,格式 key@https://面板地址,多个用逗号分隔
+      - key: PTERO_SERVERS_JSON
+        sync: false            # 可选:手动绑定服务器列表,自动发现失败时兜底
+      - key: ADMIN_TOKEN
+        generateValue: true    # 自动生成管理接口鉴权 token
+      - key: MONITOR_INTERVAL
+        value: "30"
+      - key: TG_BOT_TOKEN
+        sync: false            # 可选:Telegram Bot Token
+      - key: TG_CHAT_ID
+        sync: false            # 可选:Telegram 接收消息的 chat_id
