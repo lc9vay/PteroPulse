@@ -53,6 +53,8 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 _last_state = {}          # serverId -> state
 _cache = {}               # serverId -> 最近一次成功结果 dict
+# panel -> 响应风格: "standard"(官方 Pterodactyl) / "shironeko"(ShironekoServer 等魔改面板)
+_panel_flavor = {}
 
 
 def parse_key_entry(entry: str):
@@ -214,12 +216,41 @@ except Exception as _e:
 
 
 def _match_key_for_sid(target_sid: str, key: str, panel: str) -> bool:
-    """验证某 key 是否能访问某 serverId。"""
+    """验证某 key 是否能访问某 serverId。兼容官方与 Shironeko 响应结构。"""
     try:
         info = fetch(f"{panel}/api/client/servers/{target_sid}", key, timeout=12)
-        return str(info.get("attributes", {}).get("identifier", "")).strip() == target_sid
+        a = info.get("attributes") or info.get("server") or {}
+        ids = {str(a.get(k) or "").strip() for k in ("identifier", "uuid", "uuid_short")}
+        return target_sid in ids
     except Exception:
         return False
+
+
+def _discover_servers_for_key(key: str, panel: str) -> list:
+    """用单个 key 拉取服务器列表, 返回 [(serverId, name), ...]。
+    先试官方 Pterodactyl 的 /api/client, 遇 404 时回退 ShironekoServer 风格的
+    /api/client/servers(其列表包装在 servers.data, ID 字段是 uuid/uuid_short)。"""
+    try:
+        data = fetch(f"{panel}/api/client", key, timeout=15)
+        _panel_flavor.setdefault(panel, "standard")
+        out = []
+        for s in data.get("data", []):
+            a = s.get("attributes", {})
+            sid = str(a.get("identifier", "")).strip()
+            if sid:
+                out.append((sid, str(a.get("name") or "")))
+        return out
+    except urllib.error.HTTPError as e:
+        if e.code not in (404, 405):
+            raise
+    data = fetch(f"{panel}/api/client/servers", key, timeout=15)
+    _panel_flavor[panel] = "shironeko"
+    out = []
+    for s in (data.get("servers") or {}).get("data", []):
+        sid = str(s.get("uuid") or s.get("uuid_short") or "").strip()
+        if sid:
+            out.append((sid, str(s.get("name") or "")))
+    return out
 
 
 def discover_servers() -> list:
@@ -228,12 +259,8 @@ def discover_servers() -> list:
     for key in API_KEYS:
         panel = _panel_of(key, _raw_key_to_panel.get(key, ""))
         try:
-            data = fetch(f"{panel}/api/client", key, timeout=15)
-            for s in data.get("data", []):
-                a = s.get("attributes", {})
-                sid = str(a.get("identifier", "")).strip()
-                if sid:
-                    found[sid] = {"serverId": sid, "apiKey": key, "panel": panel, "name": ""}
+            for sid, name in _discover_servers_for_key(key, panel):
+                found[sid] = {"serverId": sid, "apiKey": key, "panel": panel, "name": name}
         except Exception as e:
             print(f"[monitor] apiKey 发现服务器失败(忽略): {e}", file=sys.stderr)
     for m in _MANUAL_SERVERS:
@@ -303,27 +330,46 @@ def uptime_str(ms: int) -> str:
 
 
 def get_status_dict(srv) -> dict:
-    """拉取一台服务器状态。ok 仅当 state==running 且未挂起。"""
+    """拉取一台服务器状态。ok 仅当 state==running 且未挂起。
+    响应解析兼容官方 Pterodactyl 与 ShironekoServer(魔改面板)两种风格。"""
     sid = srv["serverId"]
     panel = srv.get("panel") or PANEL
     base = f"{panel}/api/client/servers/{sid}"
     info = fetch(base, srv["apiKey"])
-    name = info["attributes"]["name"]
-    limits = info["attributes"]["limits"]
+    flavor = _panel_flavor.get(panel)
+    if flavor is None:
+        # 详情响应: 官方是 {"attributes": {...}}, ShironekoServer 是 {"server": {...}}
+        flavor = "shironeko" if "server" in info else "standard"
+        _panel_flavor[panel] = flavor
+
+    if flavor == "shironeko":
+        a = info.get("server") or {}
+        limits = a.get("limits") or {}
+        suspended = bool(a.get("is_suspended"))
+        stats = fetch(f"{base}/resources", srv["apiKey"])
+        r = stats.get("resources") or {}
+        state = r.get("state", "unknown")
+        net = r.get("network") or {}
+        net_tx = float(net.get("tx_bytes") or 0)
+        net_rx = float(net.get("rx_bytes") or 0)
+    else:
+        a = info["attributes"]
+        limits = a.get("limits") or {}
+        stats = fetch(f"{base}/resources", srv["apiKey"])
+        attr = stats["attributes"]
+        state = attr.get("current_state", "unknown")
+        suspended = attr.get("is_suspended", False)
+        r = attr.get("resources", {})
+        net_tx = float(r.get("network_tx_bytes") or 0)
+        net_rx = float(r.get("network_rx_bytes") or 0)
+
+    name = str(a.get("name") or "")
     mem_limit = float(limits.get("memory") or 0)
     disk_limit = float(limits.get("disk") or 0)
     cpu_limit = float(limits.get("cpu") or 0)
-
-    stats = fetch(f"{base}/resources", srv["apiKey"])
-    attr = stats["attributes"]
-    state = attr.get("current_state", "unknown")
-    suspended = attr.get("is_suspended", False)
-    r = attr.get("resources", {})
     cpu = float(r.get("cpu_absolute") or 0)
     mem_bytes = float(r.get("memory_bytes") or 0)
     disk_bytes = float(r.get("disk_bytes") or 0)
-    net_tx = float(r.get("network_tx_bytes") or 0)
-    net_rx = float(r.get("network_rx_bytes") or 0)
     uptime = int(r.get("uptime") or 0)
 
     mem_pct = mem_bytes / 1048576 / mem_limit * 100 if mem_limit > 0 else 0.0
@@ -852,8 +898,7 @@ setInterval(function(){document.getElementById('clock').textContent=new Date().t
                     self._send_json(409, {"error": "该 apiKey 已存在", "keys": self._keys_public()})
                     return
                 try:
-                    d = fetch(f"{panel}/api/client", key, timeout=15)
-                    if not d.get("data"):
+                    if not _discover_servers_for_key(key, panel):
                         self._send_json(400, {
                             "error": "该 apiKey 无法访问任何服务器，已拒绝添加",
                             "keys": self._keys_public(),
